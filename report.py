@@ -57,9 +57,33 @@ def main():
             print(f"Snowflake's own view of hb_far: target_lag_sec {ref[0]}, mean_lag_sec {ref[1]}, maximum_lag_sec {ref[2]}, time_within_target_lag_ratio {ref[3]} (nulls = not reported while suspended)")
             hist = q(cx, "SELECT COUNT(*), SUM(IFF(refresh_action='NO_DATA',1,0)), MIN(refresh_start_time), MAX(refresh_start_time) FROM TABLE(INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY(NAME => 'HB_FAR'))")[0]
             print(f"hb_far refreshes on record: {hist[0]}, of which NO_DATA (scheduled, nothing new): {hist[1]}; window {hist[2]} -> {hist[3]}")
+    print("\n## Experiment 3: the TARGET_LAG curve (two chained hops, 45 min each, dynamic tables on their own warehouse; probe writer/reader on LEDGER_IO)\n")
+    t0 = open("results/lagcurve_b_start").read().strip() if os.path.exists("results/lagcurve_b_start") else None
+    t1 = open("results/lagcurve_b_end").read().strip() if os.path.exists("results/lagcurve_b_end") else None
+    def credits_in_window(wh):
+        # hourly metering rows overlapping the run window; the warehouses are dedicated and new, so the sum is the run's cost
+        r = q(cx, "SELECT COALESCE(SUM(credits_used_compute),0), COALESCE(SUM(credits_used_cloud_services),0) FROM TABLE(INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY(DATEADD('day', -6, CURRENT_TIMESTAMP()), CURRENT_TIMESTAMP(), %s))", (wh,))[0]
+        return float(r[0]), float(r[1])
+    print("| TARGET_LAG per hop | nominal worst case | heartbeats | p50 age | p90 age | max age | refreshes (far) | NO_DATA | DT warehouse compute credits | per hour |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for lagm, tag, wh in [(1, "b", "LEDGER_DTB"), (5, "5b", "LEDGER_DT5B"), (15, "15b", "LEDGER_DT15B")]:
+        f = f"results/lag{tag}.jsonl"
+        if not os.path.exists(f):
+            continue
+        rs = [json.loads(l) for l in open(f)]
+        ag = sorted(r["age_s"] for r in rs if r.get("kind") == "seen" and r.get("age_s") is not None)
+        st_ = [r["ts"] for r in rs if r.get("kind") == "sent"]
+        hours = (max(st_) - min(st_)) / 3600 if len(st_) > 1 else 0
+        n = len(ag); pp = lambda x: ag[min(n - 1, int(x * n))]
+        comp, cs = credits_in_window(wh)
+        h = q(cx, "SELECT COUNT(*), SUM(IFF(refresh_action='NO_DATA',1,0)) FROM TABLE(INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY(NAME => %s))", (f"HB{tag.upper()}_FAR",))[0]
+        print(f"| {lagm} min | {2*lagm} min | {len(st_)} | {pp(.5):.0f} s | {pp(.9):.0f} s | {ag[-1]:.0f} s | {int(h[0] or 0)} | {int(h[1] or 0)} | {comp:.3f} | {comp/hours if hours else 0:.2f} |")
+    io_c, io_s = credits_in_window("LEDGER_IO")
+    print(f"\nprobe traffic (one INSERT per 10 s + one SELECT per 5 s, three runs in parallel) on LEDGER_IO: {io_c:.3f} compute credits over the window {t0} -> {t1}; this is the cost the first design wrongly attributed to the dynamic tables.")
+    print("\nFirst-design run for reference (probe on the same warehouse as the DTs, TARGET_LAG 1 min, ~2 h): LEDGER_DT 2.713 compute credits; 5 and 15 min one-hour runs: 1.390 and 1.374. Flat because the probe kept the warehouse awake regardless of lag.")
     print("\n## Credits by warehouse (INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY, last 12 h)\n")
-    for wh in ["LEDGER_BATCHED", "LEDGER_TIGHT", "LEDGER_SPREAD", "LEDGER_WARM", "LEDGER_DT", "COMPUTE_WH"]:
-        r = q(cx, "SELECT COALESCE(SUM(credits_used),0), COALESCE(SUM(credits_used_compute),0), COALESCE(SUM(credits_used_cloud_services),0) FROM TABLE(INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY(DATEADD('hour', -12, CURRENT_TIMESTAMP()), CURRENT_TIMESTAMP(), %s))", (wh,))[0]
+    for wh in ["LEDGER_BATCHED", "LEDGER_TIGHT", "LEDGER_SPREAD", "LEDGER_WARM", "LEDGER_DT", "LEDGER_DT5", "LEDGER_DT15", "LEDGER_DTB", "LEDGER_DT5B", "LEDGER_DT15B", "LEDGER_IO", "COMPUTE_WH"]:
+        r = q(cx, "SELECT COALESCE(SUM(credits_used),0), COALESCE(SUM(credits_used_compute),0), COALESCE(SUM(credits_used_cloud_services),0) FROM TABLE(INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY(DATEADD('day', -6, CURRENT_TIMESTAMP()), CURRENT_TIMESTAMP(), %s))", (wh,))[0]
         print(f"  {wh}: total {float(r[0]):.3f} (compute {float(r[1]):.3f}, cloud services {float(r[2]):.3f}) = ${float(r[0])*CREDIT_USD:.2f}")
 
 
