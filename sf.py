@@ -1,5 +1,5 @@
 """Connection + tiny helpers. Key-pair auth: the private key stays in keys/ (gitignored),
-the account identifier is not a secret and lives in account.txt."""
+the account identifier comes from $SNOWFLAKE_ACCOUNT or account.txt (gitignored)."""
 import os
 import snowflake.connector
 from cryptography.hazmat.primitives import serialization

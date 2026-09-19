@@ -1,4 +1,5 @@
 keys/
+account.txt
 .venv/
 __pycache__/
 results/*.log
