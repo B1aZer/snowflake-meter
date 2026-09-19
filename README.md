@@ -1,6 +1,6 @@
 # snowflake-meter
 
-Two measured experiments on a Snowflake trial account. They back the write-up at
+Two measured experiments on a Snowflake account. They back the write-up at
 [staysup.io/snowflake-meter](https://staysup.io/snowflake-meter).
 
 1. `meter.py`, the 60-second minimum: the same 40 tiny queries under four traffic patterns, each on its own X-Small warehouse. Credits are read from `INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY`.
